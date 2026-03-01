@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Classic Windows Pipes Screensaver</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: black; }
+        #ui { 
+            position: absolute; 
+            top: 10px; 
+            left: 10px; 
+            color: white; 
+            z-index: 100;
+            font-family: Arial, sans-serif;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 10px;
+            border-radius: 5px;
+        }
+        input[type="range"] { width: 200px; }
+        label { display: block; margin: 5px 0; }
+    </style>
+</head>
+<body>
+    <div id="ui">
+        <label>Pipes Speed: <span id="speedValue">100</span>ms</label>
+        <input type="range" id="speedSlider" min="10" max="300" value="100">
+        <label><input type="checkbox" id="autoRotate" checked> Auto Rotate Camera</label>
+    </div>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://unpkg.com/three@0.128.0/examples/js/geometries/TeapotGeometry.js"></script>
+    
+    <script>
+        // Scene setup
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x000000);
+        
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(50, 50, 50);
+        
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+        
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.autoRotate = true;
+        controls.autoRotateSpeed = 2;
+        
+        // Lighting - full-bright with specular
+        const ambientLight = new THREE.AmbientLight(0xffffff, 1);
+        scene.add(ambientLight);
+        
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+        directionalLight.position.set(10, 10, 10);
+        scene.add(directionalLight);
+        
+        const pointLight = new THREE.PointLight(0xffffff, 0.5);
+        pointLight.position.set(0, 0, 0);
+        scene.add(pointLight);
+        
+        // Game state
+        const occupiedPositions = new Set();
+        const activePipes = [];
+        const sceneBounds = 100;
+        let generationDelay = 100;
+        let lastUpdateTime = 0;
+        
+        // UI elements
+        const speedSlider = document.getElementById('speedSlider');
+        const speedValue = document.getElementById('speedValue');
+        const autoRotateCheckbox = document.getElementById('autoRotate');
+        
+        speedSlider.addEventListener('input', (e) => {
+            generationDelay = parseInt(e.target.value);
+            speedValue.textContent = generationDelay;
+        });
+        
+        autoRotateCheckbox.addEventListener('change', (e) => {
+            controls.autoRotate = e.target.checked;
+        });
+        
+        // Pipe class with EXACT math requirements
+        class Pipe {
+            constructor(startPos, color) {
+                this.currentPos = startPos.clone();
+                this.direction = new THREE.Vector3(1, 0, 0);
+                this.color = color;
+                this.active = true;
+                this.meshes = [];
+            }
+            
+            step() {
+                if (!this.active) return;
+                
+                // segmentLength must be 6
+                const segmentLength = 6;
+                
+                // Create an array of directions to test (shuffle standard X, Y, Z vectors)
+                const directions = [
+                    new THREE.Vector3(1, 0, 0),
+                    new THREE.Vector3(-1, 0, 0),
+                    new THREE.Vector3(0, 1, 0),
+                    new THREE.Vector3(0, -1, 0),
+                    new THREE.Vector3(0, 0, 1),
+                    new THREE.Vector3(0, 0, -1)
+                ];
+                
+                // Shuffle directions
+                for (let i = directions.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [directions[i], directions[j]] = [directions[j], directions[i]];
+                }
+                
+                let nextPos = null;
+                let foundDir = null;
+                
+                // For each direction, calculate testPos and check collision
+                for (const dir of directions) {
+                    // You MUST use .multiplyScalar(6)
+                    let testPos = this.currentPos.clone().add(dir.clone().multiplyScalar(6));
+                    
+                    // Stringify testPos and check if it exists in occupiedPositions Set or is out of bounds
+                    const testPosString = testPos.x + ',' + testPos.y + ',' + testPos.z;
+                    
+                    if (!occupiedPositions.has(testPosString) && 
+                        Math.abs(testPos.x) < sceneBounds && 
+                        Math.abs(testPos.y) < sceneBounds && 
+                        Math.abs(testPos.z) < sceneBounds) {
+                        nextPos = testPos;
+                        foundDir = dir;
+                        break;
+                    }
+                }
+                
+                // If no valid directions exist, mark inactive and return
+                if (!nextPos) {
+                    this.active = false;
+                    return;
+                }
+                
+                this.direction = foundDir;
+                
+                // Once you have a valid nextPos, find the midpoint
+                let midPoint = this.currentPos.clone().add(nextPos).multiplyScalar(0.5);
+                
+                // Draw a CylinderGeometry at midPoint
+                const cylinderGeometry = new THREE.CylinderGeometry(0.5, 0.5, 6, 8);
+                const cylinderMaterial = new THREE.MeshPhongMaterial({ 
+                    color: this.color, 
+                    specular: 0xffffff,
+                    shininess: 100
+                });
+                const cylinder = new THREE.Mesh(cylinderGeometry, cylinderMaterial);
+                cylinder.position.copy(midPoint);
+                
+                // Rotate it using: quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), this.direction)
+                const quaternion = new THREE.Quaternion();
+                quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), this.direction);
+                cylinder.quaternion.copy(quaternion);
+                
+                scene.add(cylinder);
+                this.meshes.push(cylinder);
+                
+                // Draw a SphereGeometry (the joint) at nextPos
+                const sphereGeometry = new THREE.SphereGeometry(0.6, 16, 16);
+                const sphereMaterial = new THREE.MeshPhongMaterial({ 
+                    color: this.color, 
+                    specular: 0xffffff,
+                    shininess: 100
+                });
+                
+                // CRITICAL COLLISION FIX: Claim the space by adding BOTH the stringified nextPos AND the stringified midPoint
+                occupiedPositions.add(nextPos.x + ',' + nextPos.y + ',' + nextPos.z);
+                occupiedPositions.add(midPoint.x + ',' + midPoint.y + ',' + midPoint.z);
+                
+                // When drawing the joint at nextPos, introduce a .1% chance to use TeapotGeometry
+                if (Math.random() < 0.001) {
+                    const teapotGeometry = new THREE.TeapotGeometry(0.6 * 2.5, 10);
+                    const teapot = new THREE.Mesh(teapotGeometry, sphereMaterial);
+                    teapot.position.copy(nextPos);
+                    
+                    // If it is a teapot, align its spout using quaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), this.direction)
+                    const teapotQuaternion = new THREE.Quaternion();
+                    teapotQuaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), this.direction);
+                    teapot.quaternion.copy(teapotQuaternion);
+                    
+                    scene.add(teapot);
+                    this.meshes.push(teapot);
+                } else {
+                    const joint = new THREE.Mesh(sphereGeometry, sphereMaterial);
+                    joint.position.copy(nextPos);
+                    scene.add(joint);
+                    this.meshes.push(joint);
+                }
+                
+                // Update position
+                this.currentPos.copy(nextPos);
+            }
+        }
+        
+        function spawnNewPipe() {
+            const colors = [0xff0000, 0x00ff00, 0x0000ff, 0xffff00, 0xff00ff, 0x00ffff];
+            const color = colors[Math.floor(Math.random() * colors.length)];
+            const startPos = new THREE.Vector3(
+                (Math.random() - 0.5) * 20,
+                (Math.random() - 0.5) * 20,
+                (Math.random() - 0.5) * 20
+            );
+            const pipe = new Pipe(startPos, color);
+            activePipes.push(pipe);
+        }
+        
+        function countTotalMeshes() {
+            let count = 0;
+            scene.traverse((child) => {
+                if (child.isMesh) count++;
+            });
+            return count;
+        }
+        
+        function resetScene() {
+            // Wipe the scene completely
+            while(scene.children.length > 0) {
+                const child = scene.children[0];
+                scene.remove(child);
+                if (child.geometry) child.geometry.dispose();
+                if (child.material) {
+                    if (Array.isArray(child.material)) {
+                        child.material.forEach(m => m.dispose());
+                    } else {
+                        child.material.dispose();
+                    }
+                }
+            }
+            
+            // Clear the occupiedPositions Set
+            occupiedPositions.clear();
+            
+            // Remove all pipes from active list
+            activePipes.length = 0;
+            
+            // Re-add lights
+            scene.add(ambientLight);
+            scene.add(directionalLight);
+            scene.add(pointLight);
+            
+            // Spawn 5 brand new pipes
+            for (let i = 0; i < 5; i++) {
+                spawnNewPipe();
+            }
+        }
+        
+        // Initialize with 5 active pipes
+        for (let i = 0; i < 5; i++) {
+            spawnNewPipe();
+        }
+        
+        // Animation loop
+        function animate(timestamp) {
+            requestAnimationFrame(animate);
+            
+            // Use a timestamp check to run the pipe logic based on the slider delay
+            if (timestamp - lastUpdateTime >= generationDelay) {
+                lastUpdateTime = timestamp;
+                
+                // Use a forEach loop to call .step() on ALL active pipes simultaneously
+                activePipes.forEach(pipe => {
+                    pipe.step();
+                });
+                
+                // If a pipe dies, DO NOT remove its meshes from the scene
+                // Simply remove it from your active update list and spawn a new active pipe to replace it
+                const deadPipes = activePipes.filter(pipe => !pipe.active);
+                deadPipes.forEach(() => {
+                    spawnNewPipe();
+                });
+                
+                // In your main animate() loop, AFTER all pipes have stepped, check if totalMeshCount exceeds 4000
+                if (countTotalMeshes() > 4000) {
+                    // If it does, wipe the scene completely, clear the occupiedPositions Set, and spawn 5 brand new pipes
+                    resetScene();
+                }
+            }
+            
+            controls.update();
+            renderer.render(scene, camera);
+        }
+        
+        animate(0);
+        
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
